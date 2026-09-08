@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
-VERSION = "1.0.5"
+VERSION = "1.0.6"
 UPDATE_REPO = "benfoster231/ProlificWatcher"
 
 STUDIES_URL = "https://app.prolific.com/studies"
@@ -32,12 +32,33 @@ def log(msg):
         f.write(line + "\n")
 
 
+DEFAULT_CONFIG = {
+    "poll_min_seconds": 5,
+    "poll_max_seconds": 9,
+    "auto_click": True,
+    "dry_run": False,
+    "min_reward_gbp": 0.0,
+    "min_hourly_gbp": 0.0,
+    "max_duration_minutes": 0,
+    "keywords_include": [],
+    "keywords_exclude": [],
+    "sound_alert": True,
+    "chrome_channel": "chrome",
+    "max_backoff_seconds": 60,
+}
+
+
 def load_config():
+    # A single downloaded .exe should be able to run on its own — create a
+    # sensible default config.json next to it rather than requiring the
+    # user to separately source one.
     config_path = APP_DIR / "config.json"
     if not config_path.exists():
-        print(f"config.json not found next to the program at {config_path}")
-        print("Copy config.json into this folder and edit it, then run again.")
-        sys.exit(1)
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(DEFAULT_CONFIG, f, indent=2)
+        print(f"No config.json found — created a default one at {config_path}")
+        print("Edit it in Notepad to change filters, then restart if you want different settings.")
+        return dict(DEFAULT_CONFIG)
     with open(config_path, "r", encoding="utf-8") as f:
         return json.load(f)
 
