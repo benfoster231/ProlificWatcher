@@ -5,6 +5,21 @@ on any study that matches your filters — whatever's already listed the moment
 you start it, plus anything new that appears afterward — using your real
 logged-in Chrome session.
 
+## Auto-update
+
+The .exe checks `https://github.com/benfoster231/ProlificWatcher/releases`
+for a newer version every time it starts. If one exists, it downloads it and
+replaces itself automatically, then relaunches — you (or your friend) never
+need to manually re-download after a change.
+
+To ship a new version: bump `VERSION` in `watcher.py`, rebuild
+(`build_exe.bat`), then:
+```
+git add -A && git commit -m "..." && git push
+gh release create vX.Y.Z dist/ProlificWatcher.exe --title "vX.Y.Z" --notes "..."
+```
+Every copy of the exe already out there picks it up next time it's launched.
+
 ## How it works
 
 - Drives an actual Chrome window (via Playwright), not a hidden/headless bot —
