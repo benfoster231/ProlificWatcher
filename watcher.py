@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
-VERSION = "1.0.10"
+VERSION = "1.0.11"
 UPDATE_REPO = "benfoster231/ProlificWatcher"
 
 # Where automatic error/issue diagnostics get sent (see report() below) —
@@ -35,6 +35,15 @@ INSTALL_ID_PATH = APP_DIR / "install_id.txt"
 def log(msg):
     line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}"
     print(line)
+    with open(LOG_PATH, "a", encoding="utf-8") as f:
+        f.write(line + "\n")
+
+
+def log_file_only(msg):
+    # Same as log(), minus the console print — for routine/frequent status
+    # lines that would just be noise in the console but are still useful in
+    # watcher.log for later reference or diagnostics.
+    line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}"
     with open(LOG_PATH, "a", encoding="utf-8") as f:
         f.write(line + "\n")
 
@@ -243,27 +252,35 @@ def parse_minutes(text):
 
 
 def card_matches_filters(card_text, cfg):
+    # Returns (matches, reason) — reason is a human-readable explanation
+    # (including the actual amount seen) when matches is False, so callers
+    # can log exactly why a study was skipped, not just that it was.
     # Prolific shows £ or $ depending on the study/researcher, so match
     # either — a £-only pattern would silently stop filtering $ studies.
+    currency_match = re.search(r"[£$]", card_text)
+    currency = currency_match.group(0) if currency_match else "£"
     reward = parse_money(card_text, r"[£$](\d+(?:\.\d+)?)\s*•")
     hourly = parse_money(card_text, r"[£$](\d+(?:\.\d+)?)\s*/\s*hr")
     duration = parse_minutes(card_text)
 
     if cfg["min_reward_gbp"] and (reward is None or reward < cfg["min_reward_gbp"]):
-        return False
+        shown = f"{currency}{reward:.2f}" if reward is not None else "no reward found"
+        return False, f"{shown} is below your minimum of {currency}{cfg['min_reward_gbp']:.2f}"
     if cfg["min_hourly_gbp"] and (hourly is None or hourly < cfg["min_hourly_gbp"]):
-        return False
+        shown = f"{currency}{hourly:.2f}/hr" if hourly is not None else "no hourly rate found"
+        return False, f"{shown} is below your minimum of {currency}{cfg['min_hourly_gbp']:.2f}/hr"
     if cfg["max_duration_minutes"] and duration is not None and duration > cfg["max_duration_minutes"]:
-        return False
+        return False, f"{duration} mins is over your maximum of {cfg['max_duration_minutes']} mins"
 
     lower = card_text.lower()
     includes = [k.lower() for k in cfg.get("keywords_include", [])]
     excludes = [k.lower() for k in cfg.get("keywords_exclude", [])]
     if includes and not any(k in lower for k in includes):
-        return False
-    if any(k in lower for k in excludes):
-        return False
-    return True
+        return False, "doesn't match any of your required keywords"
+    matched_exclude = next((k for k in excludes if k in lower), None)
+    if matched_exclude:
+        return False, f"matched your excluded keyword '{matched_exclude}'"
+    return True, None
 
 
 def get_study_cards(page):
@@ -516,15 +533,15 @@ def run():
                         pending = [c for c in cards if study_status.get(c["title"]) is None]
 
                         if time.time() - last_heartbeat >= 60:
-                            log(f"Still watching — {len(cards)} studies currently listed, "
-                                f"nothing new to act on right now.")
+                            log_file_only(f"Still watching — {len(cards)} studies currently listed, "
+                                          f"nothing new to act on right now.")
                             last_heartbeat = time.time()
 
                         for card in pending:
                             title = card["title"]
-                            matches = card_matches_filters(card["text"], cfg_snapshot)
+                            matches, reason = card_matches_filters(card["text"], cfg_snapshot)
                             if not matches:
-                                log(f"STUDY AVAILABLE: {title} (filtered out)")
+                                log(f"SKIPPED: {title} — {reason}")
                                 study_status[title] = "filtered"
                                 continue
 

@@ -68,16 +68,20 @@ Every copy of the exe already out there picks it up next time it's launched.
 - Every 5-9 seconds (randomized, configurable) it reloads the studies page
   and checks everything currently listed against your filters in
   `config.json` — including on the very first check after startup, not just
-  ones that appear later. It also prints a quiet "Still watching — N studies
-  currently listed" line once a minute, so there's visible confirmation it's
-  alive even during a stretch with nothing new to report.
+  ones that appear later. A "Still watching — N studies currently listed"
+  line gets written once a minute so there's a record it was alive even
+  during a quiet stretch, but only to `watcher.log` — it's left out of the
+  console so the visible window doesn't fill up with routine noise.
   If the browser ever closes unexpectedly (a crash, Chrome getting killed,
   etc.), it's detected automatically and a fresh browser is relaunched and
   logged back in within a few seconds — no manual restart needed.
-  A study that doesn't match your filters, or that you've already
-  successfully taken, is only logged/attempted once. But a study that
-  matched and *failed* (full, disabled, or a timing hiccup) is retried on
-  the next cycle rather than given up on — availability can change, e.g.
+  A study that doesn't match your filters is logged as `SKIPPED: <title> —
+  <reason>`, with the actual reward/hourly/duration it found and the
+  threshold it missed by — so you can see exactly what's getting passed
+  over, not just that something was. A study you've already successfully
+  taken is only logged once. But a study that matched and *failed* (full,
+  disabled, or a timing hiccup) is retried on the next cycle rather than
+  given up on — availability can change, e.g.
   someone else's reservation expires and frees a slot back up.
   One caveat: this keys studies by their title text, which Prolific doesn't
   guarantee is unique — two genuinely different postings with an identical
