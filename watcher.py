@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 UPDATE_REPO = "benfoster231/ProlificWatcher"
 
 STUDIES_URL = "https://app.prolific.com/studies"
