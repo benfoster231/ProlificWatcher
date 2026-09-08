@@ -5,6 +5,18 @@ on any study that matches your filters — whatever's already listed the moment
 you start it, plus anything new that appears afterward — using your real
 logged-in Chrome session.
 
+## Diagnostic reporting
+
+When something goes wrong (a click fails, the take-part button isn't found,
+login times out, the update check errors, etc.), the app automatically sends
+a short report to a public `ntfy.sh` topic
+(`prolificwatcher-diag-bf231-9k2x7q`) — just the log line text, the version
+number, and a random per-install ID (not tied to identity). No credentials,
+no page content, nothing beyond what's already written to the local
+`watcher.log`. This lets issues get diagnosed without needing someone to
+manually copy their log file. View the feed at
+`https://ntfy.sh/prolificwatcher-diag-bf231-9k2x7q`.
+
 ## Auto-update
 
 The .exe checks `https://github.com/benfoster231/ProlificWatcher/releases`

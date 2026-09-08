@@ -1,5 +1,6 @@
 storage_state.json
 watcher.log
+install_id.txt
 config.json.bak
 build/
 dist/

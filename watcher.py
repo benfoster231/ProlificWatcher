@@ -5,14 +5,19 @@ import subprocess
 import sys
 import time
 import urllib.request
+import uuid
 import winsound
 from pathlib import Path
 from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
-VERSION = "1.0.6"
+VERSION = "1.0.7"
 UPDATE_REPO = "benfoster231/ProlificWatcher"
+
+# Where automatic error/issue diagnostics get sent (see report() below) —
+# a free pub/sub topic, not a secret; disclosed to users in START_HERE.txt.
+DIAG_TOPIC = "prolificwatcher-diag-bf231-9k2x7q"
 
 STUDIES_URL = "https://app.prolific.com/studies"
 
@@ -23,6 +28,7 @@ else:
 
 STORAGE_STATE_PATH = APP_DIR / "storage_state.json"
 LOG_PATH = APP_DIR / "watcher.log"
+INSTALL_ID_PATH = APP_DIR / "install_id.txt"
 
 
 def log(msg):
@@ -30,6 +36,35 @@ def log(msg):
     print(line)
     with open(LOG_PATH, "a", encoding="utf-8") as f:
         f.write(line + "\n")
+
+
+def get_install_id():
+    # A random label (not tied to identity) so reports from the same
+    # install can be told apart from each other in the diagnostics feed.
+    if INSTALL_ID_PATH.exists():
+        return INSTALL_ID_PATH.read_text().strip()
+    new_id = uuid.uuid4().hex[:8]
+    INSTALL_ID_PATH.write_text(new_id)
+    return new_id
+
+
+def report(msg):
+    # Logs locally as usual, and best-effort sends a short diagnostic report
+    # off-machine so issues can be debugged without needing someone to
+    # manually copy their log file. Disclosed in START_HERE.txt. Never
+    # includes credentials or page content — just the same short status
+    # lines already written to watcher.log locally.
+    log(msg)
+    try:
+        body = f"[{get_install_id()}] v{VERSION} — {msg}"
+        req = urllib.request.Request(
+            f"https://ntfy.sh/{DIAG_TOPIC}",
+            data=body.encode("utf-8"),
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=5)
+    except Exception:
+        pass  # diagnostics are best-effort — never let this break the app
 
 
 DEFAULT_CONFIG = {
@@ -111,7 +146,7 @@ def ensure_logged_in(page):
             if studies_page_ready(page):
                 break
         else:
-            log("Timed out waiting for login. Exiting.")
+            report("Timed out waiting for login. Exiting.")
             sys.exit(1)
         dismiss_cookie_banner(page)
     log("Logged in.")
@@ -211,17 +246,17 @@ def try_take_part(page, card, cfg):
         take_part_btn.wait_for(state="visible", timeout=5000)
         btn_text = take_part_btn.inner_text().strip()
         if not take_part_btn.is_enabled():
-            log(f"Button '{btn_text}' disabled (full/ineligible?) for: {title}")
+            report(f"Button '{btn_text}' disabled (full/ineligible?) for: {title}")
             return False
         take_part_btn.click(timeout=5000)
         log(f"CLICKED '{btn_text}' for: {title}")
         return True
     except PWTimeout:
-        log(f"No matching take-part button found (or timed out) for: {title}. "
-            f"If Prolific changed the button wording, update TAKE_PART_PATTERN in watcher.py.")
+        report(f"No matching take-part button found (or timed out) for: {title}. "
+               f"If Prolific changed the button wording, update TAKE_PART_PATTERN in watcher.py.")
         return False
     except Exception as e:
-        log(f"Error taking part in '{title}': {e}")
+        report(f"Error taking part in '{title}': {e}")
         return False
 
 
@@ -300,7 +335,7 @@ def check_for_update():
     except SystemExit:
         raise
     except Exception as e:
-        log(f"Update check failed, continuing with current version: {e}")
+        report(f"Update check failed, continuing with current version: {e}")
 
 
 def run():
@@ -394,8 +429,13 @@ def run():
                 except KeyboardInterrupt:
                     raise
                 except Exception as e:
+                    was_already_failing = backoff > 0
                     backoff = min(cfg.get("max_backoff_seconds", 60), max(5, backoff * 2 or 5))
-                    log(f"Error during poll cycle: {e}. Backing off {backoff}s.")
+                    msg = f"Error during poll cycle: {e}. Backing off {backoff}s."
+                    # Only report the first failure in a streak remotely —
+                    # repeated retries of the same underlying issue would
+                    # otherwise flood the diagnostics feed.
+                    (log if was_already_failing else report)(msg)
                     time.sleep(backoff)
                     continue
 
