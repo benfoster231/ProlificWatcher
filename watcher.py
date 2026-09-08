@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
-VERSION = "1.0.2"
+VERSION = "1.0.3"
 UPDATE_REPO = "benfoster231/ProlificWatcher"
 
 STUDIES_URL = "https://app.prolific.com/studies"
@@ -209,36 +209,40 @@ def apply_update(new_exe_path):
     # tiny detached helper: it waits for this process to fully exit (freeing
     # the file lock), swaps the new exe into place, relaunches, then deletes
     # itself. This process exits immediately after spawning it.
+    #
+    # Delays use "ping -n" rather than "timeout" — timeout needs a real
+    # console to read from and silently aborts the whole script without one,
+    # which matters because CREATE_NO_WINDOW still allocates a (hidden)
+    # console but a fully detached helper might not.
     current_exe = Path(sys.executable)
     helper_script = APP_DIR / "_update_helper.bat"
     helper_script.write_text(
         "@echo off\r\n"
-        "timeout /t 2 /nobreak >nul\r\n"
+        "ping -n 3 127.0.0.1 >nul\r\n"
         ":retry\r\n"
         f'move /y "{new_exe_path}" "{current_exe}" >nul 2>&1\r\n'
         "if errorlevel 1 (\r\n"
-        "    timeout /t 1 /nobreak >nul\r\n"
+        "    ping -n 2 127.0.0.1 >nul\r\n"
         "    goto retry\r\n"
         ")\r\n"
         f'start "" "{current_exe}"\r\n'
         'del "%~f0"\r\n'
     )
-    # DETACHED_PROCESS drops the console window. CREATE_BREAKAWAY_FROM_JOB
-    # matters if this exe itself was launched inside a Windows Job Object
-    # (some launchers/sandboxes do this) that kills all descendants when
-    # this process exits — without it, the helper could get killed before
-    # it finishes swapping the file in and relaunching. Not every job
-    # allows breakaway, so fall back if the flag itself is rejected.
+    # CREATE_BREAKAWAY_FROM_JOB matters if this exe itself was launched
+    # inside a Windows Job Object (some launchers/sandboxes do this) that
+    # kills all descendants when this process exits — without it, the
+    # helper could get killed mid-swap. Not every job allows breakaway, so
+    # fall back to plain CREATE_NO_WINDOW if the flag itself is rejected.
     try:
         subprocess.Popen(
             ["cmd", "/c", str(helper_script)],
-            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_BREAKAWAY_FROM_JOB,
+            creationflags=subprocess.CREATE_NO_WINDOW | subprocess.CREATE_BREAKAWAY_FROM_JOB,
             close_fds=True,
         )
     except OSError:
         subprocess.Popen(
             ["cmd", "/c", str(helper_script)],
-            creationflags=subprocess.DETACHED_PROCESS,
+            creationflags=subprocess.CREATE_NO_WINDOW,
             close_fds=True,
         )
     log("Update downloaded — restarting with the new version...")
