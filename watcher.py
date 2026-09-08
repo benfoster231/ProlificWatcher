@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
-VERSION = "1.0.4"
+VERSION = "1.0.5"
 UPDATE_REPO = "benfoster231/ProlificWatcher"
 
 STUDIES_URL = "https://app.prolific.com/studies"
@@ -81,14 +81,18 @@ def ensure_logged_in(page):
         log("Not logged in. Log in to Prolific in the opened Chrome window.")
         log("Waiting for login to complete (checking every 3s, up to 10 minutes)...")
         for _ in range(200):
-            page.goto(STUDIES_URL, wait_until="domcontentloaded")
-            dismiss_cookie_banner(page)
+            time.sleep(3)
+            # Passively check the page as-is — do NOT navigate/reload here.
+            # The user may be actively typing their email/password on the
+            # login form right now; forcing a goto() would wipe the form and
+            # bounce them back to a fresh login page mid-entry. Auth0 itself
+            # redirects back to the app once login actually succeeds.
             if studies_page_ready(page):
                 break
-            time.sleep(3)
         else:
             log("Timed out waiting for login. Exiting.")
             sys.exit(1)
+        dismiss_cookie_banner(page)
     log("Logged in.")
 
 
