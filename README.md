@@ -72,7 +72,11 @@ Every copy of the exe already out there picks it up next time it's launched.
   studies appear live without a manual refresh, and constantly reloading
   turned out to be what was causing the intermittent browser crashes early
   versions of this had. A full reload only happens occasionally (every ~150
-  cycles) as a safety net against silent staleness.
+  cycles) as a safety net against silent staleness. Since the page no longer
+  visibly refreshes, it prints a quiet "Still watching — N studies currently
+  listed" line once a minute so it's obvious it's alive even when nothing
+  new has shown up — the browser sitting still is normal now, not a sign
+  it's stuck.
   A study that doesn't match your filters, or that you've already
   successfully taken, is only logged/attempted once. But a study that
   matched and *failed* (full, disabled, or a timing hiccup) is retried on

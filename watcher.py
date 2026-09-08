@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
-VERSION = "1.0.8"
+VERSION = "1.0.9"
 UPDATE_REPO = "benfoster231/ProlificWatcher"
 
 # Where automatic error/issue diagnostics get sent (see report() below) —
@@ -479,6 +479,7 @@ def run():
             log("Watching for new studies. Press Ctrl+C to stop.")
             cycles_since_save = 0
             cycles_since_refresh = 0
+            last_heartbeat = time.time()
             away_from_studies = False
             while True:
                 try:
@@ -519,6 +520,11 @@ def run():
 
                         cards = get_study_cards(page)
                         pending = [c for c in cards if study_status.get(c["title"]) is None]
+
+                        if time.time() - last_heartbeat >= 60:
+                            log(f"Still watching — {len(cards)} studies currently listed, "
+                                f"nothing new to act on right now.")
+                            last_heartbeat = time.time()
 
                         for card in pending:
                             title = card["title"]
