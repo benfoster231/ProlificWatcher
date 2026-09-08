@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
-VERSION = "1.0.9"
+VERSION = "1.0.10"
 UPDATE_REPO = "benfoster231/ProlificWatcher"
 
 # Where automatic error/issue diagnostics get sent (see report() below) —
@@ -458,7 +458,7 @@ def run():
     alerted_titles = set()
     backoff = 0
 
-    with sync_playwright() as p:
+    def launch_and_login(p):
         browser = p.chromium.launch(
             channel=cfg.get("chrome_channel", "chrome"),
             headless=False,
@@ -469,16 +469,18 @@ def run():
             viewport={"width": 1400, "height": 900},
         )
         page = context.new_page()
-        try:
-            ensure_logged_in(page)
-            context.storage_state(path=str(STORAGE_STATE_PATH))
+        ensure_logged_in(page)
+        context.storage_state(path=str(STORAGE_STATE_PATH))
+        return browser, context, page
 
+    with sync_playwright() as p:
+        browser, context, page = launch_and_login(p)
+        try:
             cfg_lock = threading.Lock()
             threading.Thread(target=console_command_loop, args=(cfg, cfg_lock), daemon=True).start()
 
             log("Watching for new studies. Press Ctrl+C to stop.")
             cycles_since_save = 0
-            cycles_since_refresh = 0
             last_heartbeat = time.time()
             away_from_studies = False
             while True:
@@ -506,17 +508,9 @@ def run():
                             log("Back on the studies page — resuming normal watching.")
                             away_from_studies = False
 
-                        # Prolific's own UI says studies appear live without a
-                        # manual refresh — reloading every cycle was almost
-                        # certainly what caused the recurring browser crashes.
-                        # Just re-scan the live DOM instead, with an occasional
-                        # full reload as a safety net against silent staleness.
-                        cycles_since_refresh += 1
-                        if cycles_since_refresh >= 150:
-                            page.reload(wait_until="domcontentloaded")
-                            dismiss_cookie_banner(page)
-                            page.wait_for_timeout(400)
-                            cycles_since_refresh = 0
+                        page.reload(wait_until="domcontentloaded")
+                        dismiss_cookie_banner(page)
+                        page.wait_for_timeout(400)
 
                         cards = get_study_cards(page)
                         pending = [c for c in cards if study_status.get(c["title"]) is None]
@@ -559,6 +553,23 @@ def run():
                 except KeyboardInterrupt:
                     raise
                 except Exception as e:
+                    if "has been closed" in str(e) or "Target crashed" in str(e):
+                        report(f"Browser closed unexpectedly — relaunching. ({e})")
+                        for closer in (context.close, browser.close):
+                            try:
+                                closer()
+                            except Exception:
+                                pass
+                        try:
+                            browser, context, page = launch_and_login(p)
+                            away_from_studies = False
+                            backoff = 0
+                            log("Relaunched successfully — resuming watching.")
+                            continue
+                        except Exception as relaunch_err:
+                            report(f"Relaunch after crash failed: {relaunch_err}")
+                            # falls through to the normal backoff below
+
                     was_already_failing = backoff > 0
                     backoff = min(cfg.get("max_backoff_seconds", 60), max(5, backoff * 2 or 5))
                     msg = f"Error during poll cycle: {e}. Backing off {backoff}s."

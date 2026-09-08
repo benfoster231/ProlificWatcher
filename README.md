@@ -65,18 +65,15 @@ Every copy of the exe already out there picks it up next time it's launched.
   The session is then saved to `storage_state.json` next to the program, so
   future runs start already logged in. Delete that file to force a fresh
   login (e.g. if the session expires).
-- Every 5-9 seconds (randomized, configurable) it re-scans the *live* studies
-  page for anything matching your filters in `config.json` — including on
-  the very first check after startup, not just ones that appear later.
-  It does **not** reload the page each cycle — Prolific's own UI says new
-  studies appear live without a manual refresh, and constantly reloading
-  turned out to be what was causing the intermittent browser crashes early
-  versions of this had. A full reload only happens occasionally (every ~150
-  cycles) as a safety net against silent staleness. Since the page no longer
-  visibly refreshes, it prints a quiet "Still watching — N studies currently
-  listed" line once a minute so it's obvious it's alive even when nothing
-  new has shown up — the browser sitting still is normal now, not a sign
-  it's stuck.
+- Every 5-9 seconds (randomized, configurable) it reloads the studies page
+  and checks everything currently listed against your filters in
+  `config.json` — including on the very first check after startup, not just
+  ones that appear later. It also prints a quiet "Still watching — N studies
+  currently listed" line once a minute, so there's visible confirmation it's
+  alive even during a stretch with nothing new to report.
+  If the browser ever closes unexpectedly (a crash, Chrome getting killed,
+  etc.), it's detected automatically and a fresh browser is relaunched and
+  logged back in within a few seconds — no manual restart needed.
   A study that doesn't match your filters, or that you've already
   successfully taken, is only logged/attempted once. But a study that
   matched and *failed* (full, disabled, or a timing hiccup) is retried on
