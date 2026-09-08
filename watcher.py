@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 UPDATE_REPO = "benfoster231/ProlificWatcher"
 
 STUDIES_URL = "https://app.prolific.com/studies"
@@ -223,11 +223,24 @@ def apply_update(new_exe_path):
         f'start "" "{current_exe}"\r\n'
         'del "%~f0"\r\n'
     )
-    subprocess.Popen(
-        ["cmd", "/c", str(helper_script)],
-        creationflags=subprocess.CREATE_NO_WINDOW,
-        close_fds=True,
-    )
+    # DETACHED_PROCESS drops the console window. CREATE_BREAKAWAY_FROM_JOB
+    # matters if this exe itself was launched inside a Windows Job Object
+    # (some launchers/sandboxes do this) that kills all descendants when
+    # this process exits — without it, the helper could get killed before
+    # it finishes swapping the file in and relaunching. Not every job
+    # allows breakaway, so fall back if the flag itself is rejected.
+    try:
+        subprocess.Popen(
+            ["cmd", "/c", str(helper_script)],
+            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_BREAKAWAY_FROM_JOB,
+            close_fds=True,
+        )
+    except OSError:
+        subprocess.Popen(
+            ["cmd", "/c", str(helper_script)],
+            creationflags=subprocess.DETACHED_PROCESS,
+            close_fds=True,
+        )
     log("Update downloaded — restarting with the new version...")
     sys.exit(0)
 
