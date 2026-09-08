@@ -5,6 +5,30 @@ on any study that matches your filters — whatever's already listed the moment
 you start it, plus anything new that appears afterward — using your real
 logged-in Chrome session.
 
+## First-run setup and live commands
+
+The first time `config.json` doesn't exist yet, it asks two questions right
+in the console: a minimum reward per study, and whether to include studies
+that require a camera. Answers are saved and never asked again.
+
+While it's running, type these in the black console window and press Enter:
+
+| Command | Effect |
+|---|---|
+| `min <amount>` | Change the minimum reward, e.g. `min 2.50` |
+| `camera include` | Allow studies that require a camera |
+| `camera exclude` | Skip studies that require a camera |
+| `status` | Show current settings |
+| `help` | List commands |
+
+Changes take effect immediately and are saved to `config.json`, so they
+persist across restarts too.
+
+The reward minimum matches whatever currency symbol (£ or $) the study
+itself shows — it does not convert between currencies, so `min 5` means "at
+least 5 in whatever currency that study displays," not "5 in one specific
+currency." Studies on the same account can be priced in either.
+
 ## Diagnostic reporting
 
 When something goes wrong (a click fails, the take-part button isn't found,
@@ -41,13 +65,18 @@ Every copy of the exe already out there picks it up next time it's launched.
   The session is then saved to `storage_state.json` next to the program, so
   future runs start already logged in. Delete that file to force a fresh
   login (e.g. if the session expires).
-- Every 5-9 seconds (randomized, configurable) it reloads the studies page and
-  checks every currently-listed study against your filters in `config.json`
-  — including on the very first check after startup, not just ones that
-  appear later. A study that doesn't match your filters, or that you've
-  already successfully taken, is only logged/attempted once. But a study
-  that matched and *failed* (full, disabled, or a timing hiccup) is retried
-  on the next cycle rather than given up on — availability can change, e.g.
+- Every 5-9 seconds (randomized, configurable) it re-scans the *live* studies
+  page for anything matching your filters in `config.json` — including on
+  the very first check after startup, not just ones that appear later.
+  It does **not** reload the page each cycle — Prolific's own UI says new
+  studies appear live without a manual refresh, and constantly reloading
+  turned out to be what was causing the intermittent browser crashes early
+  versions of this had. A full reload only happens occasionally (every ~150
+  cycles) as a safety net against silent staleness.
+  A study that doesn't match your filters, or that you've already
+  successfully taken, is only logged/attempted once. But a study that
+  matched and *failed* (full, disabled, or a timing hiccup) is retried on
+  the next cycle rather than given up on — availability can change, e.g.
   someone else's reservation expires and frees a slot back up.
   One caveat: this keys studies by their title text, which Prolific doesn't
   guarantee is unique — two genuinely different postings with an identical

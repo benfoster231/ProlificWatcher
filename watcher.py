@@ -3,6 +3,7 @@ import random
 import re
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 import uuid
@@ -12,7 +13,7 @@ from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
-VERSION = "1.0.7"
+VERSION = "1.0.8"
 UPDATE_REPO = "benfoster231/ProlificWatcher"
 
 # Where automatic error/issue diagnostics get sent (see report() below) —
@@ -75,6 +76,7 @@ DEFAULT_CONFIG = {
     "min_reward_gbp": 0.0,
     "min_hourly_gbp": 0.0,
     "max_duration_minutes": 0,
+    "exclude_camera_studies": False,
     "keywords_include": [],
     "keywords_exclude": [],
     "sound_alert": True,
@@ -83,19 +85,97 @@ DEFAULT_CONFIG = {
 }
 
 
+def save_config(cfg):
+    config_path = APP_DIR / "config.json"
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2)
+
+
+def prompt_first_run_setup():
+    # Asked once, ever — the answers get saved to config.json, and from then
+    # on load_config() just reads the file like normal. Falls back to
+    # defaults silently if stdin isn't interactive (e.g. under automation).
+    print("First-time setup — press Enter to accept the default in [brackets].")
+    cfg = dict(DEFAULT_CONFIG)
+    try:
+        raw = input("Minimum reward per study, in your account's currency (0 = no minimum) [0]: ").strip()
+        if raw:
+            cfg["min_reward_gbp"] = float(raw)
+    except (ValueError, EOFError, OSError):
+        pass
+    try:
+        raw = input("Include studies that require a camera? (y/n) [y]: ").strip().lower()
+        if raw.startswith("n"):
+            cfg["exclude_camera_studies"] = True
+    except (EOFError, OSError):
+        pass
+    return cfg
+
+
 def load_config():
     # A single downloaded .exe should be able to run on its own — create a
     # sensible default config.json next to it rather than requiring the
     # user to separately source one.
     config_path = APP_DIR / "config.json"
     if not config_path.exists():
-        with open(config_path, "w", encoding="utf-8") as f:
-            json.dump(DEFAULT_CONFIG, f, indent=2)
-        print(f"No config.json found — created a default one at {config_path}")
-        print("Edit it in Notepad to change filters, then restart if you want different settings.")
-        return dict(DEFAULT_CONFIG)
+        cfg = prompt_first_run_setup()
+        save_config(cfg)
+        print(f"Saved your choices to {config_path}.")
+        print("Edit that file in Notepad any time to change other filters, "
+              "or use the min/camera commands below while this is running.")
+        return cfg
     with open(config_path, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+CONSOLE_HELP = (
+    "Commands (type one and press Enter):\n"
+    "  min <amount>     - set minimum reward per study (0 = no minimum), e.g: min 2.50\n"
+    "  camera include   - allow studies that require a camera\n"
+    "  camera exclude   - skip studies that require a camera\n"
+    "  status           - show current settings\n"
+    "  help             - show this list\n"
+)
+
+
+def console_command_loop(cfg, cfg_lock):
+    # Runs in a background thread so it can't block the watch loop. Lets
+    # someone change the two settings they're most likely to want to tweak
+    # on the fly, without editing config.json and restarting.
+    print(CONSOLE_HELP)
+    while True:
+        try:
+            line = input().strip()
+        except (EOFError, OSError):
+            return
+        if not line:
+            continue
+        parts = line.split()
+        cmd = parts[0].lower()
+        if cmd == "min" and len(parts) > 1:
+            try:
+                amount = float(parts[1])
+            except ValueError:
+                print("Couldn't parse that amount — example: min 2.50")
+                continue
+            with cfg_lock:
+                cfg["min_reward_gbp"] = amount
+                save_config(cfg)
+            log(f"Minimum reward set to {amount}.")
+        elif cmd == "camera" and len(parts) > 1 and parts[1].lower() in ("include", "exclude"):
+            with cfg_lock:
+                cfg["exclude_camera_studies"] = parts[1].lower() == "exclude"
+                save_config(cfg)
+            log(f"Camera-required studies: {'excluded' if cfg['exclude_camera_studies'] else 'included'}.")
+        elif cmd == "status":
+            with cfg_lock:
+                log(f"min_reward={cfg.get('min_reward_gbp')} "
+                    f"camera_excluded={cfg.get('exclude_camera_studies')} "
+                    f"auto_click={cfg.get('auto_click')} dry_run={cfg.get('dry_run')}")
+        elif cmd == "help":
+            print(CONSOLE_HELP)
+        else:
+            print("Unknown command. Type 'help' for the list.")
 
 
 def alert(cfg):
@@ -163,8 +243,10 @@ def parse_minutes(text):
 
 
 def card_matches_filters(card_text, cfg):
-    reward = parse_money(card_text, r"£(\d+(?:\.\d+)?)\s*•")
-    hourly = parse_money(card_text, r"£(\d+(?:\.\d+)?)\s*/\s*hr")
+    # Prolific shows £ or $ depending on the study/researcher, so match
+    # either — a £-only pattern would silently stop filtering $ studies.
+    reward = parse_money(card_text, r"[£$](\d+(?:\.\d+)?)\s*•")
+    hourly = parse_money(card_text, r"[£$](\d+(?:\.\d+)?)\s*/\s*hr")
     duration = parse_minutes(card_text)
 
     if cfg["min_reward_gbp"] and (reward is None or reward < cfg["min_reward_gbp"]):
@@ -235,29 +317,54 @@ def find_return_to_studies_control(page):
     return None
 
 
+def study_requires_camera(page):
+    # The study detail page lists a "You will also need:" section (Audio /
+    # Camera / Microphone) — confirmed by inspecting a real study. Scoped to
+    # a short window right after that heading so a study whose description
+    # merely mentions "camera" in passing doesn't false-positive.
+    try:
+        text = page.locator("main").inner_text()
+    except Exception:
+        try:
+            text = page.inner_text("body")
+        except Exception:
+            return False
+    if "You will also need:" not in text:
+        return False
+    snippet = text.split("You will also need:", 1)[1][:200]
+    return "camera" in snippet.lower()
+
+
 def try_take_part(page, card, cfg):
+    # Returns "taken" (clicked, or dry-run got this far), "camera_excluded"
+    # (skip permanently, user doesn't want camera studies), or "failed"
+    # (transient — full/disabled/timeout, worth retrying next cycle).
     title = card["title"]
-    if cfg.get("dry_run"):
-        log(f"[DRY RUN] Would take part in: {title}")
-        return True
     try:
         card["link"].click(timeout=5000)
+        page.wait_for_timeout(300)
+        if cfg.get("exclude_camera_studies") and study_requires_camera(page):
+            log(f"Skipping (requires camera): {title}")
+            return "camera_excluded"
         take_part_btn = page.get_by_role("button", name=TAKE_PART_PATTERN).first
         take_part_btn.wait_for(state="visible", timeout=5000)
         btn_text = take_part_btn.inner_text().strip()
         if not take_part_btn.is_enabled():
             report(f"Button '{btn_text}' disabled (full/ineligible?) for: {title}")
-            return False
+            return "failed"
+        if cfg.get("dry_run"):
+            log(f"[DRY RUN] Would click '{btn_text}' for: {title}")
+            return "taken"
         take_part_btn.click(timeout=5000)
         log(f"CLICKED '{btn_text}' for: {title}")
-        return True
+        return "taken"
     except PWTimeout:
         report(f"No matching take-part button found (or timed out) for: {title}. "
                f"If Prolific changed the button wording, update TAKE_PART_PATTERN in watcher.py.")
-        return False
+        return "failed"
     except Exception as e:
         report(f"Error taking part in '{title}': {e}")
-        return False
+        return "failed"
 
 
 def parse_version(v):
@@ -366,11 +473,18 @@ def run():
             ensure_logged_in(page)
             context.storage_state(path=str(STORAGE_STATE_PATH))
 
+            cfg_lock = threading.Lock()
+            threading.Thread(target=console_command_loop, args=(cfg, cfg_lock), daemon=True).start()
+
             log("Watching for new studies. Press Ctrl+C to stop.")
             cycles_since_save = 0
+            cycles_since_refresh = 0
             away_from_studies = False
             while True:
                 try:
+                    with cfg_lock:
+                        cfg_snapshot = dict(cfg)
+
                     if not is_on_studies_list(page):
                         if not away_from_studies:
                             log("You're on a study page — pausing refreshing so it "
@@ -391,16 +505,24 @@ def run():
                             log("Back on the studies page — resuming normal watching.")
                             away_from_studies = False
 
-                        page.reload(wait_until="domcontentloaded")
-                        dismiss_cookie_banner(page)
-                        page.wait_for_timeout(400)
+                        # Prolific's own UI says studies appear live without a
+                        # manual refresh — reloading every cycle was almost
+                        # certainly what caused the recurring browser crashes.
+                        # Just re-scan the live DOM instead, with an occasional
+                        # full reload as a safety net against silent staleness.
+                        cycles_since_refresh += 1
+                        if cycles_since_refresh >= 150:
+                            page.reload(wait_until="domcontentloaded")
+                            dismiss_cookie_banner(page)
+                            page.wait_for_timeout(400)
+                            cycles_since_refresh = 0
 
                         cards = get_study_cards(page)
                         pending = [c for c in cards if study_status.get(c["title"]) is None]
 
                         for card in pending:
                             title = card["title"]
-                            matches = card_matches_filters(card["text"], cfg)
+                            matches = card_matches_filters(card["text"], cfg_snapshot)
                             if not matches:
                                 log(f"STUDY AVAILABLE: {title} (filtered out)")
                                 study_status[title] = "filtered"
@@ -408,14 +530,16 @@ def run():
 
                             if title not in alerted_titles:
                                 log(f"STUDY AVAILABLE: {title}")
-                                alert(cfg)
+                                alert(cfg_snapshot)
                                 alerted_titles.add(title)
 
-                            if cfg.get("auto_click", True):
-                                if try_take_part(page, card, cfg):
-                                    study_status[title] = "taken"
-                                # else: left unset on purpose — retry next cycle,
-                                # it may have just been full/disabled momentarily.
+                            if cfg_snapshot.get("auto_click", True):
+                                result = try_take_part(page, card, cfg_snapshot)
+                                if result in ("taken", "camera_excluded"):
+                                    study_status[title] = "taken" if result == "taken" else "filtered"
+                                # "failed" -> left unset on purpose — retry next
+                                # cycle, it may have just been full/disabled
+                                # momentarily.
                             else:
                                 study_status[title] = "notified"
 
