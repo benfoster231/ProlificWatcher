@@ -1,0 +1,10 @@
+storage_state.json
+watcher.log
+config.json.bak
+build/
+dist/
+*.spec
+__pycache__/
+*.pyc
+ProlificWatcher-forFriend.zip
+_update_helper.bat

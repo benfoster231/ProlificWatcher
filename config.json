@@ -1,0 +1,14 @@
+{
+  "poll_min_seconds": 5,
+  "poll_max_seconds": 9,
+  "auto_click": true,
+  "dry_run": false,
+  "min_reward_gbp": 0.0,
+  "min_hourly_gbp": 0.0,
+  "max_duration_minutes": 0,
+  "keywords_include": [],
+  "keywords_exclude": [],
+  "sound_alert": false,
+  "chrome_channel": "chrome",
+  "max_backoff_seconds": 60
+}
