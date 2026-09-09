@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
-VERSION = "1.0.11"
+VERSION = "1.0.12"
 UPDATE_REPO = "benfoster231/ProlificWatcher"
 
 # Where automatic error/issue diagnostics get sent (see report() below) —
@@ -294,12 +294,24 @@ def get_study_cards(page):
         title = link.inner_text().strip()
         if not title:
             continue
-        try:
-            block_text = link.locator(
-                "xpath=ancestor::*[self::div or self::li][1]"
-            ).inner_text()
-        except Exception:
-            block_text = title
+        # Walk up through ancestor div/li levels until the captured text
+        # actually contains a currency symbol — the nearest ancestor alone
+        # was found (in real use) to sometimes miss the reward line for
+        # some cards, presumably due to a slightly different DOM nesting
+        # for those studies. Capping at 4 levels avoids ever grabbing the
+        # whole sidebar if no ancestor happens to contain a currency symbol.
+        block_text = title
+        for level in range(1, 5):
+            try:
+                candidate = link.locator(
+                    f"xpath=ancestor::*[self::div or self::li][{level}]"
+                ).inner_text()
+            except Exception:
+                break
+            if candidate:
+                block_text = candidate
+            if re.search(r"[£$]", block_text):
+                break
         cards.append({"title": title, "link": link, "text": block_text})
     return cards
 
@@ -541,7 +553,13 @@ def run():
                             title = card["title"]
                             matches, reason = card_matches_filters(card["text"], cfg_snapshot)
                             if not matches:
-                                log(f"SKIPPED: {title} — {reason}")
+                                # "no reward/hourly rate found" means parsing
+                                # genuinely failed to read a currency amount
+                                # that should be there — worth flagging
+                                # remotely so a real occurrence gets caught,
+                                # unlike a normal below-threshold skip.
+                                logger = report if "no reward found" in reason or "no hourly rate found" in reason else log
+                                logger(f"SKIPPED: {title} — {reason}")
                                 study_status[title] = "filtered"
                                 continue
 
@@ -577,15 +595,28 @@ def run():
                                 closer()
                             except Exception:
                                 pass
-                        try:
-                            browser, context, page = launch_and_login(p)
-                            away_from_studies = False
-                            backoff = 0
-                            log("Relaunched successfully — resuming watching.")
-                            continue
-                        except Exception as relaunch_err:
-                            report(f"Relaunch after crash failed: {relaunch_err}")
-                            # falls through to the normal backoff below
+                        # Keep retrying the relaunch itself until it actually
+                        # succeeds — a single failed attempt used to fall
+                        # through to retrying the normal cycle against the
+                        # same dead page forever, which is a permanent hang
+                        # dressed up as "still running". Never leave this
+                        # branch with a known-dead page in play.
+                        relaunch_backoff = 0
+                        while True:
+                            try:
+                                browser, context, page = launch_and_login(p)
+                                away_from_studies = False
+                                backoff = 0
+                                log("Relaunched successfully — resuming watching.")
+                                break
+                            except KeyboardInterrupt:
+                                raise
+                            except Exception as relaunch_err:
+                                relaunch_backoff = min(60, max(5, relaunch_backoff * 2 or 5))
+                                report(f"Relaunch attempt failed: {relaunch_err}. "
+                                       f"Retrying in {relaunch_backoff}s.")
+                                time.sleep(relaunch_backoff)
+                        continue
 
                     was_already_failing = backoff > 0
                     backoff = min(cfg.get("max_backoff_seconds", 60), max(5, backoff * 2 or 5))

@@ -74,7 +74,12 @@ Every copy of the exe already out there picks it up next time it's launched.
   console so the visible window doesn't fill up with routine noise.
   If the browser ever closes unexpectedly (a crash, Chrome getting killed,
   etc.), it's detected automatically and a fresh browser is relaunched and
-  logged back in within a few seconds — no manual restart needed.
+  logged back in within a few seconds — no manual restart needed. If that
+  relaunch attempt itself fails (can happen if Chrome hasn't fully released
+  its resources yet right after crashing), it keeps retrying with backoff
+  until it succeeds, rather than giving up after one try and being stuck
+  hitting a dead page forever — a real bug in an earlier version that
+  looked exactly like "stopped clicking studies" from the outside.
   A study that doesn't match your filters is logged as `SKIPPED: <title> —
   <reason>`, with the actual reward/hourly/duration it found and the
   threshold it missed by — so you can see exactly what's getting passed
