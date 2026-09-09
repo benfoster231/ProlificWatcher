@@ -11,14 +11,22 @@ import winsound
 from pathlib import Path
 from urllib.parse import urlparse
 
+import sentry_sdk
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
-VERSION = "1.0.12"
+VERSION = "1.0.13"
 UPDATE_REPO = "benfoster231/ProlificWatcher"
 
 # Where automatic error/issue diagnostics get sent (see report() below) —
 # a free pub/sub topic, not a secret; disclosed to users in START_HERE.txt.
 DIAG_TOPIC = "prolificwatcher-diag-bf231-9k2x7q"
+
+# Real error tracking (stack traces, grouping across installs, history) —
+# a Sentry client key, safe to embed (it can only submit events, nothing
+# else). ntfy above stays as the lightweight human-readable feed; Sentry is
+# for actually diagnosing what's grouped, how often, and since which
+# version. Disclosed alongside the ntfy topic in README/START_HERE.txt.
+SENTRY_DSN = "https://3942975fd4969a390c695587b22c79f3@o4512056588369920.ingest.de.sentry.io/4512056594464848"
 
 STUDIES_URL = "https://app.prolific.com/studies"
 
@@ -58,6 +66,34 @@ def get_install_id():
     return new_id
 
 
+def init_sentry():
+    # Best-effort — telemetry setup must never be why the app fails to
+    # start. traces_sample_rate=0 means error tracking only, no
+    # performance/transaction data (not needed, keeps it lightweight).
+    try:
+        sentry_sdk.init(
+            dsn=SENTRY_DSN,
+            release=f"prolificwatcher@{VERSION}",
+            traces_sample_rate=0,
+            send_default_pii=False,
+        )
+        sentry_sdk.set_user({"id": get_install_id()})
+    except Exception:
+        pass
+
+
+def capture(exc):
+    # Sends a real exception (with stack trace) to Sentry, where it gets
+    # grouped with other occurrences of the same underlying bug across every
+    # install automatically. Separate from report()'s ntfy message, which
+    # stays a lightweight human-readable feed — this is for actually
+    # diagnosing what's broken, how often, and since which version.
+    try:
+        sentry_sdk.capture_exception(exc)
+    except Exception:
+        pass
+
+
 def report(msg):
     # Logs locally as usual, and best-effort sends a short diagnostic report
     # off-machine so issues can be debugged without needing someone to
@@ -65,6 +101,10 @@ def report(msg):
     # includes credentials or page content — just the same short status
     # lines already written to watcher.log locally.
     log(msg)
+    try:
+        sentry_sdk.capture_message(msg, level="warning")
+    except Exception:
+        pass
     try:
         body = f"[{get_install_id()}] v{VERSION} — {msg}"
         req = urllib.request.Request(
@@ -387,11 +427,13 @@ def try_take_part(page, card, cfg):
         take_part_btn.click(timeout=5000)
         log(f"CLICKED '{btn_text}' for: {title}")
         return "taken"
-    except PWTimeout:
+    except PWTimeout as e:
+        capture(e)
         report(f"No matching take-part button found (or timed out) for: {title}. "
                f"If Prolific changed the button wording, update TAKE_PART_PATTERN in watcher.py.")
         return "failed"
     except Exception as e:
+        capture(e)
         report(f"Error taking part in '{title}': {e}")
         return "failed"
 
@@ -471,10 +513,12 @@ def check_for_update():
     except SystemExit:
         raise
     except Exception as e:
+        capture(e)
         report(f"Update check failed, continuing with current version: {e}")
 
 
 def run():
+    init_sentry()
     log(f"ProlificWatcher v{VERSION}")
     check_for_update()
 
@@ -588,6 +632,12 @@ def run():
                 except KeyboardInterrupt:
                     raise
                 except Exception as e:
+                    # Always sent to Sentry regardless of what happens below —
+                    # unlike the ntfy feed, Sentry is built to handle "this
+                    # happened 40 times" gracefully (grouped, with a count),
+                    # so there's no need to throttle this the way ntfy is.
+                    capture(e)
+
                     if "has been closed" in str(e) or "Target crashed" in str(e):
                         report(f"Browser closed unexpectedly — relaunching. ({e})")
                         for closer in (context.close, browser.close):
@@ -612,6 +662,7 @@ def run():
                             except KeyboardInterrupt:
                                 raise
                             except Exception as relaunch_err:
+                                capture(relaunch_err)
                                 relaunch_backoff = min(60, max(5, relaunch_backoff * 2 or 5))
                                 report(f"Relaunch attempt failed: {relaunch_err}. "
                                        f"Retrying in {relaunch_backoff}s.")
@@ -621,9 +672,10 @@ def run():
                     was_already_failing = backoff > 0
                     backoff = min(cfg.get("max_backoff_seconds", 60), max(5, backoff * 2 or 5))
                     msg = f"Error during poll cycle: {e}. Backing off {backoff}s."
-                    # Only report the first failure in a streak remotely —
+                    # Only report the first failure in a streak to ntfy —
                     # repeated retries of the same underlying issue would
-                    # otherwise flood the diagnostics feed.
+                    # otherwise flood that feed (Sentry above already got
+                    # every occurrence regardless).
                     (log if was_already_failing else report)(msg)
                     time.sleep(backoff)
                     continue
@@ -644,3 +696,9 @@ if __name__ == "__main__":
         run()
     except KeyboardInterrupt:
         log("Stopped by user.")
+    except Exception as e:
+        # A genuinely unhandled crash outside the main loop's own recovery
+        # logic (e.g. during initial setup) — capture it before letting the
+        # console show the traceback, so it isn't lost entirely.
+        capture(e)
+        raise

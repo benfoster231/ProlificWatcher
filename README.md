@@ -32,14 +32,21 @@ currency." Studies on the same account can be priced in either.
 ## Diagnostic reporting
 
 When something goes wrong (a click fails, the take-part button isn't found,
-login times out, the update check errors, etc.), the app automatically sends
-a short report to a public `ntfy.sh` topic
-(`prolificwatcher-diag-bf231-9k2x7q`) — just the log line text, the version
-number, and a random per-install ID (not tied to identity). No credentials,
-no page content, nothing beyond what's already written to the local
-`watcher.log`. This lets issues get diagnosed without needing someone to
-manually copy their log file. View the feed at
-`https://ntfy.sh/prolificwatcher-diag-bf231-9k2x7q`.
+login times out, the update check errors, etc.), the app automatically
+reports it two ways — no credentials or page content in either, nothing
+beyond what's already written to the local `watcher.log`:
+
+- **Sentry** — real error tracking with full stack traces. Every genuine
+  Python exception is sent via `sentry_sdk.capture_exception`, which groups
+  matching errors together across every install automatically, keeps
+  history (unlike the ntfy feed below), and tags each event with the app
+  version and an anonymous per-install ID. This is the primary way issues
+  actually get diagnosed now.
+- **ntfy.sh** — a lightweight parallel text feed at
+  `https://ntfy.sh/prolificwatcher-diag-bf231-9k2x7q`, viewable in any
+  browser with no login. Kept as a simple, no-account way to glance at
+  recent activity; messages expire after ~12 hours and there's no grouping
+  or history beyond that.
 
 ## Auto-update
 
